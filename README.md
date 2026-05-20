@@ -297,6 +297,6 @@ progetto_dataleak/
 
 | Name | Surname | Student ID (Matricola) |
 |---|---|---|
-| Leonardo | Necordi | S5642683|
+| Leonardo | Necordi | S5642683 |
 | | | |
 | | | |

@@ -1,5 +1,10 @@
 from .base_module import DataLeakExtractor
 
+
+# Headers Order Extractor:
+# Extracts bits of information based on the order of headers in the request.
+# It compares the 2nd and 3rd headers(if present) and appends a "0" or "1" to the bit buffer for the entrypoint accordingly.
+# Once 8 bits are collected, it converts them to a character and appends it to the leaked data for that entrypoint.
 class HeadersOrderExtractor(DataLeakExtractor):
     def extract(self, headers, entrypoint, leaked_data, bit_buffers):
         headers_list = list(headers.keys())

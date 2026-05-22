@@ -3,7 +3,6 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
-# No external dependecies yet
 COPY requirements.txt .
 RUN touch requirements.txt && pip install -r requirements.txt
 

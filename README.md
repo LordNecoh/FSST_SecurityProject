@@ -179,29 +179,22 @@ chmod +x test_complete.sh test_tec1.sh test_tec2.sh
 ### Full test suite
 
 ```bash
-./test_complete.sh <PORT> <on|off>
+./test_complete.sh <protected|unprotected|direct>
 ```
 
 | Command | Description |
 |---|---|
-| `./test_complete.sh 8000 on` | Both techniques through proxy with protection **enabled** |
-| `./test_complete.sh 8000 off` | Both techniques **bypassing** the proxy (direct to server) |
-| `./test_complete.sh 8001 on` | Both techniques hitting the server **directly** on port 8001 |
-
-### Individual technique tests
-
-```bash
-./test_tec1.sh <PORT>   # Dedicated Header only
-./test_tec2.sh <PORT>   # Headers Order only
-```
+| `./test_complete.sh protected` | Both techniques through proxy with protection **enabled** |
+| `./test_complete.sh unprotected` | Both techniques **bypassing** the proxy (direct to server) |
+| `./test_complete.sh direct` | Both techniques hitting the server **directly** on port 8001 |
 
 ### Expected results
 
 | Scenario | Technique 1 | Technique 2 |
 |---|---|---|
-| `8000 on` (proxy, protected) | ✅ Blocked | ✅ Neutralized (garbage) |
-| `8000 off` (proxy, unprotected) | ✅ Leaked | ✅ Leaked |
-| `8001 on/off` (direct server) | ✅ Leaked | ✅ Leaked |
+| `protected` | ✅ Blocked | ✅ Neutralized (garbage) |
+| `unprotected` | ✅ Leaked | ✅ Leaked |
+| `direct` | ✅ Leaked | ✅ Leaked |
 
 ---
 
@@ -298,5 +291,5 @@ progetto_dataleak/
 | Name | Surname | Student ID (Matricola) |
 |---|---|---|
 | Leonardo | Necordi | S5642683 |
-| | | |
+| | | | 
 | | | |

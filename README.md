@@ -253,13 +253,22 @@ docker compose down
 Make the test scripts executable:
 
 ```bash
-chmod +x test_complete.sh test_tec1.sh test_tec2.sh test_server.sh
+chmod +x test_complete.sh
 ```
-
+```bash
+chmod +x test_faq.sh
+```
+As for `./test_complete.sh`, it can be run in three different modes (protected/unprotected/direct)
+```bash
+Usage: ./test_complete.sh <mode>
+  protected    - Through proxy, protection enabled  (port 8000)
+  unprotected  - Through proxy, protection disabled (port 8000)
+  direct       - Direct to server, no proxy         (port 8001)
+```
 ### 6.1 Complete protected test through the proxy
 
 ```bash
-./test_complete.sh 8000 on
+./test_complete.sh protected
 ```
 
 Expected behavior:
@@ -271,7 +280,7 @@ Expected behavior:
 ### 6.2 Direct malicious-server test
 
 ```bash
-./test_complete.sh 8001 on
+./test_complete.sh direct
 ```
 
 Expected behavior:
@@ -280,21 +289,53 @@ Expected behavior:
 - `headersorder` successfully reconstructs `tec2`;
 - this proves that the malicious server works when the proxy is bypassed.
 
-### 6.3 Individual tests
-
-The project also includes three smaller test scripts:
-
-- `test_server.sh` tests the dedicated-header leak directly on the malicious server, using port `8001`;
-- `test_tec1.sh` tests the dedicated-header leak through the proxy, using port `8000`;
-- `test_tec2.sh` demonstrates the headers-order technique directly on the server and through the proxy.
-
-Run them with:
+### 6.3 Unprotected test through the proxy (disabled)
 
 ```bash
-./test_server.sh
-./test_tec1.sh
-./test_tec2.sh
+./test_complete.sh unprotected
 ```
+
+Expected behavior:
+- The script communicates with the proxy on port 8000, but disables the sanitization features by sending `{"enabled": false}` during the `/setup` phase;
+- `dedicatedheader` successfully forwards the `X-dataleak` header to the server, allowing it to store and return `dGVjMQ==`;
+- `headersorder` successfully forwards the requests keeping their native order intact, allowing the malicious server to reconstruct the original string `tec2`;
+- This proves that the proxy supports a dynamic bypass mode and remains fully transparent when protection is explicitly disabled for an entrypoint.
+  
+Before each test, the scripts clear the server state with `DELETE /clear`.
+
+### Core Requirements & Edge Cases test (./test_faq.sh)
+
+The `./test_faq.sh` script focuses on validating edge cases, memory overwriting mechanisms, and specific operational constraints (defined in the FAQ on Aulaweb). It tests how both components handle sequential data streams, buffer overwrites, and the delimiter logic
+
+It requires specifying the target port and whether the proxy mode is active (on) or bypassed (off):
+
+```bash
+Usage: ./test_faq.sh <PORT> <on|off>
+  Test via Proxy:  ./test_faq.sh 8000 on
+  Test via Server: ./test_faq.sh 8001 off
+```
+
+### 6.4 Direct malicious-server edge case validation
+
+```bash
+./test_faq.sh 8001 off
+```
+
+Expected behavior:
+- `dedicatedheader` (Data Overwrite): The attacker sends a payload containing `'OLD'`, followed by a payload containing `'NEW'`. The malicious server must properly clear its buffer upon receiving the second payload and return exclusively `TkVX `(`'NEW'`);
+- `headersorder` (Sequential Delimiters): The attacker sends character `'A'`, followed by 8 consecutive zero bits (the string terminator), followed by character `'B'`, and another string terminator. The server must correctly process the delimiter, reset its state machine for the new character block, overwrite the internal storage, and return exclusively `B`;
+- This proves that the malicious server handles memory updates, sequential transmissions, and state resets properly when the proxy is bypassed.
+
+### 6.5 Protected edge case validation through the proxy
+
+```bash
+./test_faq.sh 8000 on
+```
+
+Expected behavior:
+- `dedicatedheader` Mitigation: The proxy intercepts both sequential `PUT` requests, strips the `X-dataleak` header on both occurrences, and passes clean packets to the backend. The server returns an empty string `''`;
+- `headersorder` Mitigation: The proxy processes the consecutive stream of 32 HTTP requests, altering the physical line order of `Header-A` and `Header-B` across the entire transmission. The sequence of bits is corrupted before hitting the server backend, failing to reconstruct the consecutive sequences;
+- The script reports that both edge case attacks have been successfully neutralized by the active proxy layout.
 
 Before each test, the scripts clear the server state with `DELETE /clear`.
 

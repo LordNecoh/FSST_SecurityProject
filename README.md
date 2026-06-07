@@ -36,9 +36,9 @@ The direct server port is used to show that the leak techniques work. The proxy 
 
 The project has two main components.
 
-The `proxy` service listens on port `8000`. It behaves like a transparent bridge: it receives client requests, forwards them to the malicious server, receives the server response, and sends it back to the client. For configured leak entrypoints, it sanitizes only the malicious `PUT /<entrypoint>` requests.
+The `proxy` service listens on port `8000` that behaves like a transparent bridge: it receives client requests, forwards them to the malicious server, receives the server response, and sends it back to the client. For configured leak entrypoints, it sanitizes only the malicious `PUT /<entrypoint>` requests.
 
-The `server` service listens on port `8001`. It is the malicious HTTP service. It registers dynamic entrypoints, receives data through the implemented covert channels, reconstructs the leaked value, stores it in memory, and returns it through `GET /<entrypoint>`.
+The `server` service listens on port `8001`. It is the malicious HTTP service that registers dynamic entrypoints, receives data through the implemented covert channels, reconstructs the leaked value, stores it in memory, and returns it through `GET /<entrypoint>`.
 
 The proxy is intentionally separated from the malicious server. This models the case in which a network administrator cannot directly modify the service but can place a defensive bridge in front of it.
 
@@ -46,9 +46,9 @@ The proxy is intentionally separated from the malicious server. This models the 
 
 ## 2. Implemented leak techniques
 
-The implementation supports multiple independent leak activities at the same time. Each activity is identified by its own dynamic entrypoint, for example `/leak1`, `/sample`, or `/test_ho`.
+The implementation supports multiple independent leak activities at the same time and each activity is identified by its own dynamic entrypoint.
 
-### 2.1 Dedicated header — `dedicatedheader`
+### 2.1 Dedicated header — `dedicated_header`
 
 The client transfers data through the custom HTTP header `X-dataleak`.
 
@@ -60,7 +60,7 @@ Host: localhost:8001
 X-dataleak: Y2lhbw==
 ```
 
-Here `Y2lhbw==` is the Base64 representation of `ciao`.
+`Y2lhbw==` is the Base64 representation of `ciao`.
 
 Server behavior:
 
@@ -73,7 +73,7 @@ Proxy defense:
 - the proxy removes the leak-carrying header before forwarding the request;
 - as a result, the malicious server receives no useful data for that leak.
 
-### 2.2 Headers order — `headersorder`
+### 2.2 Headers order — `headers_order`
 
 The client transfers one bit per HTTP request by changing the relative order of two headers.
 
@@ -84,9 +84,9 @@ Header-A before Header-B  -> bit 0
 Header-B before Header-A  -> bit 1
 ```
 
-Eight consecutive bits form one ASCII character. A sequence of eight zero bits, `00000000`, terminates the current string.
+Eight consecutive bits form one ASCII character and a sequence of eight zero bits, `00000000`, terminates the current string.
 
-For assignment usage, the logical payload should be Base64-encoded text. For example, the string `ciao` should be sent as the ASCII characters of `Y2lhbw==`, followed by the `00000000` terminator.
+For usage of the assignment, the logical payload should be Base64-encoded text. For example like we report before, the string `ciao` should be sent as the ASCII characters of `Y2lhbw==`, followed by the `00000000` terminator.
 
 Server behavior:
 
@@ -187,16 +187,16 @@ curl -X DELETE http://localhost:8001/clear
 
 ## 4. Requirements
 
-Install the following tools before running the project:
+All the following tools need to be installed before running the project:
 
 - Docker
 - Docker Compose plugin (`docker compose`)
 - `curl`
 - a Bash-compatible shell
 
-No HTTPS configuration is required. The assignment tests the HTTP endpoints.
+No HTTPS configuration is required in fact the assignment tests just the HTTP endpoints.
 
-The services use in-memory state. Restarting the containers or calling `DELETE /clear` removes configured entrypoints, leaked values, and partial bit buffers.
+The services use in-memory state, by restarting the containers or calling `DELETE /clear` removes configured entrypoints, leaked values, and partial bit buffers.
 
 ---
 
@@ -238,7 +238,7 @@ The expected exposed ports are:
 docker compose logs -f
 ```
 
-This is useful during the oral demonstration because the proxy prints when it protects an entrypoint and when it sanitizes a `PUT` request.
+If you encounter issues with Docker Compose, we recommend using the `logs` flag to view the system logs during the Compose phase
 
 ### 5.5 Stop the environment
 

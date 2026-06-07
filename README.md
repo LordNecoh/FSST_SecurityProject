@@ -601,11 +601,9 @@ A new technique should include at least:
 progetto_dataleak/
 ├── README.md
 ├── docker-compose.yml
-├── group_<groupname>.csv
+├── group_PastaCoiBroccoli.csv
 ├── test_complete.sh
-├── test_server.sh
-├── test_tec1.sh
-├── test_tec2.sh
+├── test_faq.sh
 ├── proxy/
 │   ├── Dockerfile
 │   ├── proxy.py

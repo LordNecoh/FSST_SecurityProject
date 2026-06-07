@@ -36,8 +36,9 @@ echo "=========================================="
 echo " STARTING TEST IN MODE: $MODE (PORT: $PORT)"
 echo "=========================================="
 
-# To ensure a clean state, we clear any previous setup on the server
+# To ensure a clean state, we clear any previous setup on the server AND proxy
 curl -X DELETE http://localhost:8001/clear
+curl -X DELETE http://localhost:8000/clear
 
 # --- TECHNIQUE 1: DEDICATED HEADER ---
 echo -e "\n[*] Test 1: Dedicated Header (Sending: 'tec1' -> dGVjMQ==)"

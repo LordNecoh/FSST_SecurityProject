@@ -62,9 +62,12 @@ class ProxyHandler(BaseHTTPRequestHandler):
         headers_list = list(self.headers.items())
 
         # Method selection
+        if method == 'DELETE' and path == '/clear':
+            configs.clear()
+            print("[*] Proxy config cleared")
 
         # For setup requests
-        if method == 'POST' and path == '/setup':
+        elif method == 'POST' and path == '/setup':
             if body:
                 data = json.loads(body.decode('utf-8'))
                 entrypoint = "/" + data.get('entrypoint', '').lstrip('/')
@@ -87,6 +90,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self._forward_request(method, self.path, headers_list, body)
 
     # Map HTTP methods to the handler
+    do_DELETE = _handle_request
     do_GET = _handle_request
     do_POST = _handle_request
     do_PUT = _handle_request
